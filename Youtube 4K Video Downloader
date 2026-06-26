@@ -1,0 +1,215 @@
+from flask import Flask, render_template_string, request, send_file, jsonify, send_from_directory
+import yt_dlp
+import os
+
+# 1. DEFINE THE APP FIRST (This fixes your NameError)
+app = Flask(__name__)
+
+DOWNLOAD_FOLDER = 'Koder_Web_Downloads'
+ASSET_FOLDER = '.' 
+
+if not os.path.exists(DOWNLOAD_FOLDER):
+    os.makedirs(DOWNLOAD_FOLDER)
+
+# 2. YOUR UI DESIGN
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Koder | Professional Multi-Platform Downloader</title>
+    <link rel="icon" type="image/png" href="/assets/favicon.png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background: #050505; color: #fff; min-height: 100vh; }
+        .nav-item { color: #666; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; transition: 0.3s; cursor: pointer; }
+        .nav-item:hover { color: #FF0092; }
+        .accent-glow { box-shadow: 0 0 60px rgba(255, 0, 146, 0.1); }
+        .glass { background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.05); }
+        select { background-color: #121212 !important; color: white !important; appearance: none; -webkit-appearance: none; }
+        .loader { border: 3px solid rgba(255, 0, 146, 0.1); border-top: 3px solid #FF0092; border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="flex flex-col items-center">
+    <nav class="w-full border-b border-white/5 py-4 px-6 flex justify-center space-x-6 md:space-x-12 bg-black/80 backdrop-blur-md sticky top-0 z-50">
+        <span class="nav-item">YOUTUBE</span>
+        <span class="nav-item">INSTAGRAM</span>
+        <span class="nav-item">X (TWITTER)</span>
+        <span class="nav-item">FACEBOOK</span>
+        <span class="nav-item">PINTEREST</span>
+    </nav>
+    <header class="text-center mt-12 mb-10 px-4">
+        <img src="/assets/logo.png" alt="Koder Logo" class="max-w-[240px] md:max-w-[320px] mx-auto mb-6">
+        <p class="text-gray-400 text-sm md:text-lg">The only multi-platform 4K utility creators can’t live without.</p>
+    </header>
+    <main class="max-w-2xl w-full glass p-6 md:p-12 rounded-[2.5rem] accent-glow mx-4 mb-20">
+        <div class="space-y-8">
+            <div>
+                <label class="block text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500 mb-4 text-center">Enter Production Link</label>
+                <div class="flex flex-col sm:flex-row gap-3">
+                    <input type="text" id="videoUrl" placeholder="Paste link from any platform..." 
+                           class="flex-1 bg-white/5 border border-white/10 rounded-2xl p-4 outline-none focus:border-[#FF0092] transition text-sm">
+                    <button onclick="smartAnalyze()" id="fetchBtn" class="bg-white text-black font-bold px-10 py-4 sm:py-0 rounded-2xl hover:bg-gray-200 transition text-sm">Analyze</button>
+                </div>
+            </div>
+            <div id="loading" class="flex flex-col items-center gap-3 hidden py-4">
+                <div class="loader"></div>
+                <p class="text-[10px] text-gray-500 tracking-widest uppercase">Identifying Media Source...</p>
+            </div>
+            <div id="resultCard" class="hidden space-y-6">
+                <div class="flex items-center gap-4 p-4 rounded-2xl bg-white/5 border border-white/5">
+                    <img id="vidThumb" src="" class="w-20 h-20 md:w-28 md:h-28 object-cover rounded-xl border border-white/10">
+                    <div class="flex-1 min-w-0">
+                        <span id="platBadge" class="inline-block bg-[#FF0092] text-[9px] font-bold px-2 py-0.5 rounded uppercase mb-2"></span>
+                        <h4 id="vidTitle" class="text-sm md:text-base font-bold text-white truncate"></h4>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-4">Output Resolution</label>
+                    <div class="relative">
+                        <select id="formatSelect" class="w-full rounded-2xl p-4 text-sm border border-white/10 cursor-pointer"></select>
+                    </div>
+                </div>
+                <form action="/download" method="POST" onsubmit="showProcessing()">
+                    <input type="hidden" name="url" id="formUrl">
+                    <input type="hidden" name="format_id" id="formFormatId">
+                    <button type="submit" id="downloadBtn" class="w-full bg-[#FF0092] py-5 rounded-2xl font-bold text-lg hover:brightness-110 tracking-tighter">START DOWNLOAD</button>
+                </form>
+            </div>
+        </div>
+    </main>
+    <footer class="mt-auto pb-10 text-gray-600 text-[10px] text-center tracking-[0.2em] uppercase">
+        Created by Koder Labs Digital | &copy; copyrighted 2026
+    </footer>
+    <script>
+        async function smartAnalyze() {
+            const url = document.getElementById('videoUrl').value;
+            if(!url) return;
+            const fetchBtn = document.getElementById('fetchBtn');
+            const loader = document.getElementById('loading');
+            const result = document.getElementById('resultCard');
+            fetchBtn.disabled = true; loader.classList.remove('hidden'); result.classList.add('hidden');
+            try {
+                const response = await fetch('/analyze_platform', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({url: url})
+                });
+                const data = await response.json();
+                if(data.error) throw new Error(data.error);
+                document.getElementById('vidThumb').src = data.thumbnail;
+                document.getElementById('vidTitle').innerText = data.title;
+                document.getElementById('platBadge').innerText = data.platform;
+                const select = document.getElementById('formatSelect');
+                select.innerHTML = '';
+                data.formats.forEach(f => {
+                    const opt = document.createElement('option');
+                    opt.value = f.id; opt.text = f.label + " Source (" + f.ext.toUpperCase() + ")";
+                    select.appendChild(opt);
+                });
+                document.getElementById('formUrl').value = url;
+                document.getElementById('formFormatId').value = data.formats[0].id;
+                select.onchange = (e) => { document.getElementById('formFormatId').value = e.target.value; };
+                result.classList.remove('hidden');
+            } catch (err) { alert("Failed to extract data. Ensure the link is public."); }
+            finally { fetchBtn.disabled = false; loader.classList.add('hidden'); }
+        }
+        function showProcessing() {
+            const btn = document.getElementById('downloadBtn');
+            btn.innerText = "RENDERING PRODUCTION ASSET..."; btn.disabled = true; btn.classList.add('opacity-50');
+        }
+    </script>
+</body>
+</html>
+"""
+
+# 3. BACKEND ROUTES
+@app.route('/')
+def home():
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/assets/<path:filename>')
+def serve_assets(filename):
+    return send_from_directory(ASSET_FOLDER, filename)
+
+@app.route('/analyze_platform', methods=['POST'])
+def analyze_platform():
+    url = request.json.get('url')
+    cookie_path = 'cookies.txt'
+    
+    ydl_opts = {
+        'quiet': True,
+        'noplaylist': True,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        'nocheckcertificate': True,
+        'socket_timeout': 30,
+    }
+    
+    if os.path.exists(cookie_path):
+        ydl_opts['cookiefile'] = cookie_path
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            
+            domain = url.lower()
+            platform = "WEB SOURCE"
+            if "youtube" in domain or "youtu.be" in domain: platform = "YOUTUBE"
+            elif "instagram" in domain: platform = "INSTAGRAM"
+            elif "twitter" in domain or "x.com" in domain: platform = "X / TWITTER"
+            elif "facebook" in domain: platform = "FACEBOOK"
+            elif "pinterest" in domain: platform = "PINTEREST"
+
+            formats = []
+            seen = set()
+            for f in reversed(info.get('formats', [])):
+                res = f.get('height')
+                if res and res not in seen and f.get('vcodec') != 'none':
+                    label = f"{res}p"
+                    if res >= 2160: label = "4K UHD"
+                    formats.append({'id': f['format_id'], 'label': label, 'ext': 'mp4'})
+                    seen.add(res)
+            
+            if not formats:
+                formats.append({'id': 'best', 'label': 'Production Master', 'ext': 'mp4'})
+
+            return jsonify({
+                'title': info.get('title', 'Untitled Production'),
+                'thumbnail': info.get('thumbnail', '/assets/logo.png'),
+                'platform': platform,
+                'formats': formats[:6]
+            })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/download', methods=['POST'])
+def download_video():
+    url = request.form.get('url')
+    format_id = request.form.get('format_id')
+    cookie_path = 'cookies.txt'
+    
+    ydl_opts = {
+        'format': f'{format_id}+bestaudio/best' if format_id != 'best' else 'best',
+        'outtmpl': f'{DOWNLOAD_FOLDER}/Download by Koder | %(title)s.%(ext)s',
+        'merge_output_format': 'mp4',
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        'quiet': True,
+    }
+
+    if os.path.exists(cookie_path):
+        ydl_opts['cookiefile'] = cookie_path
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            final_path = filename.rsplit('.', 1)[0] + '.mp4'
+            return send_file(final_path, as_attachment=True)
+    except Exception as e:
+        return f"Extraction failed: {e}"
+
+if __name__ == '__main__':
+    app.run(debug=True)
